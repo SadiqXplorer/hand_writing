@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Gesture Pen Pro</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: black;
+    }
+
+    video { display: none; }
+
+    canvas {
+      position: absolute;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+
+<body>
+
+<video id="video"></video>
+<canvas id="canvas"></canvas>
+
+<script>
+window.onload = function () {
+
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  let strokes = [];
+  let currentStroke = [];
+  let drawing = false;
+
+  let smoothX = null;
+  let smoothY = null;
+
+  // 💬 Typewriter Variables
+  const fullMessage = "Adil Bihari";
+  let displayedText = "";
+  let typingIndex = 0;
+  let typing = false;
+  let typingInterval = null;
+
+  function startTyping() {
+    if (typing) return;
+
+    typing = true;
+    displayedText = "";
+    typingIndex = 0;
+
+    typingInterval = setInterval(() => {
+      if (typingIndex < fullMessage.length) {
+        displayedText += fullMessage[typingIndex];
+        typingIndex++;
+      } else {
+        clearInterval(typingInterval);
+      }
+    }, 80); // typing speed
+  }
+
+  function stopTyping() {
+    typing = false;
+    clearInterval(typingInterval);
+    displayedText = "";
+    typingIndex = 0;
+  }
+
+  function resizeCanvas() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+
+  window.addEventListener("resize", resizeCanvas);
+  resizeCanvas();
+
+  function distance(a, b) {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
+  function isPinching(lm) {
+    return distance(lm[4], lm[8]) < 0.05;
+  }
+
+  function isOpenPalm(lm) {
+    return (
+      lm[8].y < lm[6].y &&
+      lm[12].y < lm[10].y &&
+      lm[16].y < lm[14].y &&
+      lm[20].y < lm[18].y
+    );
+  }
+
+  function isThumbsUp(lm) {
+    return (
+      lm[4].y < lm[2].y &&
+      lm[8].y > lm[6].y &&
+      lm[12].y > lm[10].y &&
+      lm[16].y > lm[14].y &&
+      lm[20].y > lm[18].y
+    );
+  }
+
+  function drawStrokes() {
+    ctx.strokeStyle = "#F5D061";
+    ctx.lineWidth = 5;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+
+    strokes.forEach(stroke => {
+      ctx.beginPath();
+      stroke.forEach((p, i) => {
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      });
+      ctx.stroke();
+    });
+  }
+
+  function run(results) {
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Mirror camera
+    ctx.save();
+    ctx.scale(-1, 1);
+    ctx.drawImage(results.image, -canvas.width, 0, canvas.width, canvas.height);
+    ctx.restore();
+
+    if (results.multiHandLandmarks) {
+      results.multiHandLandmarks.forEach(lm => {
+
+        const mirrored = lm.map(p => ({
+          x: 1 - p.x,
+          y: p.y,
+          z: p.z
+        }));
+
+        drawConnectors(ctx, mirrored, HAND_CONNECTIONS, {
+          color: "#00FFAA",
+          lineWidth: 2
+        });
+
+        drawLandmarks(ctx, mirrored, {
+          color: "#FF0000",
+          radius: 3
+        });
+      });
+    }
+
+    drawStrokes();
+
+    if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+
+      const lm = results.multiHandLandmarks[0];
+
+      // 👍 Thumbs Up
+      if (isThumbsUp(lm)) {
+        startTyping();
+      } else {
+        stopTyping();
+      }
+
+      // ✋ Clear
+      if (
+        results.multiHandLandmarks.length === 2 &&
+        isOpenPalm(results.multiHandLandmarks[0]) &&
+        isOpenPalm(results.multiHandLandmarks[1])
+      ) {
+        strokes = [];
+        return;
+      }
+
+      let x = (1 - lm[8].x) * canvas.width;
+      let y = lm[8].y * canvas.height;
+
+      if (smoothX === null) {
+        smoothX = x;
+        smoothY = y;
+      } else {
+        smoothX += (x - smoothX) * 0.3;
+        smoothY += (y - smoothY) * 0.3;
+      }
+
+      ctx.beginPath();
+      ctx.arc(smoothX, smoothY, 6, 0, 2 * Math.PI);
+      ctx.fillStyle = isPinching(lm) ? "#ffffff" : "#F5D061";
+      ctx.fill();
+
+      if (isPinching(lm)) {
+        if (!drawing) {
+          drawing = true;
+          currentStroke = [];
+          strokes.push(currentStroke);
+        }
+        currentStroke.push({ x: smoothX, y: smoothY });
+      } else {
+        drawing = false;
+      }
+
+    } else {
+      stopTyping();
+      drawing = false;
+      smoothX = null;
+    }
+
+    // 💖 Draw Typewriter Text
+    if (displayedText !== "") {
+      ctx.font = "bold 50px Arial";
+      ctx.fillStyle = "#ff69b4"; // pink
+      ctx.textAlign = "center";
+      ctx.fillText(displayedText, canvas.width / 2, 100);
+    }
+  }
+
+  const hands = new Hands({
+    locateFile: file =>
+      `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+  });
+
+  hands.setOptions({
+    maxNumHands: 2,
+    modelComplexity: 1,
+    minDetectionConfidence: 0.7,
+    minTrackingConfidence: 0.7
+  });
+
+  hands.onResults(run);
+
+  const camera = new Camera(video, {
+    onFrame: async () => {
+      await hands.send({ image: video });
+    },
+    width: 960,
+    height: 720
+  });
+
+  camera.start();
+
+};
+</script>
+
+</body>
+</html>
